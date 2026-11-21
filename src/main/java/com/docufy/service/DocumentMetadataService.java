@@ -5,6 +5,7 @@ import com.docufy.dto.DocumentMetadataDto;
 import com.docufy.dto.DocumentResponseDto;
 import com.docufy.entity.DocumentMetadata;
 import com.docufy.entity.DocumentStatus;
+import com.docufy.entity.Role;
 import com.docufy.entity.User;
 import com.docufy.exception.DocumentProcessingException;
 import com.docufy.exception.ResourceNotFoundException;
@@ -41,7 +42,7 @@ public class DocumentMetadataService {
 
     //method to upload and parse document
     @Transactional
-    public DocumentResponseDto uploadAndProcess(MultipartFile file) {
+    public DocumentResponseDto uploadAndProcess(MultipartFile file, User user) {
 
         String fileName = file.getOriginalFilename() != null ? file.getOriginalFilename() : "document";
         String contentType = file.getContentType() != null ? file.getContentType() : "application/octat-stream";
@@ -55,7 +56,7 @@ public class DocumentMetadataService {
                 .status(DocumentStatus.UPLOADING)
                 .fileSize(file.getSize())
                 .createdAt(LocalDateTime.now())
-             //   .user(user)
+                .user(user)
                 .build();
 
 
@@ -95,13 +96,13 @@ public class DocumentMetadataService {
 
     }
 
-    public List<DocumentResponseDto> uploadMultipleDocuments(List<MultipartFile> files) {
+    public List<DocumentResponseDto> uploadMultipleDocuments(List<MultipartFile> files,User user) {
 
 
         List<DocumentResponseDto> responseDtos = new ArrayList<>();
 
         for (MultipartFile file : files) {
-            DocumentResponseDto result = this.uploadAndProcess(file);
+            DocumentResponseDto result = this.uploadAndProcess(file,user);
             responseDtos.add(result);
         }
 
@@ -112,56 +113,86 @@ public class DocumentMetadataService {
 
 
     //    to get all the documents: This method is useful for admin
-//    public List<DocumentMetadataDto> getAllDocuments() {
-//
-//        List<DocumentMetadata> allDocuments = documentMetadataRepo.findAllByOrderByCreatedAtDesc();
-//        return allDocuments.stream()
-//                .map(documentMetadata -> modelMapper.map(documentMetadata, DocumentMetadataDto.class))
-//                .toList();
-//
-//    }
-//
-//    public List<DocumentMetadataDto> getAllDocumentsByUser(User user) {
-//        List<DocumentMetadata> documents = documentMetadataRepo.findByUserOrderByCreatedAtDesc(user);
-//        return documents.stream()
-//                .map(documentMetadata -> modelMapper.map(documentMetadata, DocumentMetadataDto.class))
-//                .toList();
-//    }
-//
-//    public DocumentMetadataDto getDocumentById(UUID id) {
-//        DocumentMetadata documentMetadata = documentMetadataRepo.findById(id).orElseThrow(() -> new ResourceNotFoundException("Document with given id not found !!"));
-//        return modelMapper.map(documentMetadata, DocumentMetadataDto.class);
-//
-//
-//    }
+    public List<DocumentMetadataDto> getAllDocuments() {
 
-    @Transactional
-    public void deleteDocument(UUID id) {
-        DocumentMetadata documentMetadata = documentMetadataRepo.findById(id).orElseThrow(() -> new ResourceNotFoundException("Document with given id not found !!"));
-
-
-        documentMetadataRepo.delete(documentMetadata);
-        //delete the vector entries
-        try {
-            String deleteVectorsSql = "DELETE FROM vector_store WHERE metadata->>'documentId' = ?";
-            int deletedCount = jdbcTemplate.update(deleteVectorsSql, id.toString());
-            log.info("Deleted {} vector chunks for document id {} ", deletedCount, id);
-
-        } catch (Exception e) {
-            log.warn("cloud not delete vectors from vector store directly: {}", e.getMessage());
-        }
+        List<DocumentMetadata> allDocuments = documentMetadataRepo.findAllByOrderByCreatedAtDesc();
+        return allDocuments.stream()
+                .map(documentMetadata -> modelMapper.map(documentMetadata, DocumentMetadataDto.class))
+                .toList();
 
     }
 
-    public List<DocumentMetadataDto> getAllDocuments() {
-      List <DocumentMetadata> allDocuments = documentMetadataRepo.findAllByOrderByCreatedAtDesc() ;
-        return allDocuments.stream()
+    public List<DocumentMetadataDto> getAllDocumentsByUser(User user) {
+        List<DocumentMetadata> documents = documentMetadataRepo.findByUserOrderByCreatedAtDesc(user);
+        return documents.stream()
                 .map(documentMetadata -> modelMapper.map(documentMetadata, DocumentMetadataDto.class))
                 .toList();
     }
 
-
-    public DocumentResponseDto getDocumentById(UUID id) {
-        return null;
+    public DocumentMetadataDto getDocumentById(UUID id) {
+        DocumentMetadata documentMetadata = documentMetadataRepo.findById(id).orElseThrow(() -> new ResourceNotFoundException("Document with given id not found !!"));
+        return modelMapper.map(documentMetadata, DocumentMetadataDto.class);
     }
+
+    public DocumentMetadataDto getDocumentById(UUID id, User user) {
+        DocumentMetadata documentMetadata;
+        if (user != null && user.getRole() == Role.ADMIN) {
+            documentMetadata = documentMetadataRepo.findById(id)
+                    .orElseThrow(() -> new ResourceNotFoundException("Document with given id not found !!"));
+        } else {
+            documentMetadata = documentMetadataRepo.findByIdAndUser(id, user)
+                    .orElseThrow(() -> new ResourceNotFoundException("Document with given id not found !!"));
+        }
+        return modelMapper.map(documentMetadata, DocumentMetadataDto.class);
+    }
+
+    @Transactional
+    public void deleteDocument(UUID id) {
+        deleteDocument(id, null);
+    }
+
+    @Transactional
+    public void deleteDocument(UUID id, User user) {
+        DocumentMetadata documentMetadata;
+        if (user != null && user.getRole() == Role.ADMIN) {
+            documentMetadata = documentMetadataRepo.findById(id)
+                    .orElseThrow(() -> new ResourceNotFoundException("Document with given id not found !!"));
+        } else if (user != null) {
+            documentMetadata = documentMetadataRepo.findByIdAndUser(id, user)
+                    .orElseThrow(() -> new ResourceNotFoundException("Document with given id not found !!"));
+        } else {
+            documentMetadata = documentMetadataRepo.findById(id)
+                    .orElseThrow(() -> new ResourceNotFoundException("Document with given id not found !!"));
+        }
+
+        documentMetadataRepo.delete(documentMetadata);
+        //delete the vector entries
+        try {
+            String deleteOllamaSql = "DELETE FROM vector_store_ollama WHERE metadata->>'documentId' = ?";
+            int deletedOllama = jdbcTemplate.update(deleteOllamaSql, id.toString());
+            log.info("Deleted {} vector chunks from vector_store_ollama for document id {} ", deletedOllama, id);
+        } catch (Exception e) {
+            log.warn("could not delete vectors from vector_store_ollama: {}", e.getMessage());
+        }
+
+        try {
+            String deleteVectorsSql = "DELETE FROM vector_store WHERE metadata->>'documentId' = ?";
+            int deletedCount = jdbcTemplate.update(deleteVectorsSql, id.toString());
+            log.info("Deleted {} vector chunks from vector_store for document id {} ", deletedCount, id);
+        } catch (Exception e) {
+            log.warn("could not delete vectors from vector store directly: {}", e.getMessage());
+        }
+    }
+
+//    public List<DocumentMetadataDto> getAllDocuments() {
+//      List <DocumentMetadata> allDocuments = documentMetadataRepo.findAllByOrderByCreatedAtDesc() ;
+//        return allDocuments.stream()
+//                .map(documentMetadata -> modelMapper.map(documentMetadata, DocumentMetadataDto.class))
+//                .toList();
+//    }
+//
+//
+//    public DocumentResponseDto getDocumentById(UUID id) {
+//        return null;
+//    }
 }

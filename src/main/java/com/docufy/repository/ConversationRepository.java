@@ -15,4 +15,6 @@ public interface ConversationRepository extends JpaRepository<Conversation, Stri
     List<Conversation> findByUserOrderByUpdatedAtDesc(User user);
     Optional<Conversation> findByIdAndUser(String id, User user);
     void deleteByIdAndUser(String id, User user);
+
+    //Optional<Conversation> findByIdAnsUser(String conversationId, User user);
 }

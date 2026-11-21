@@ -40,15 +40,15 @@ public class RagService {
     private final ConversationRepository conversationRepository;
 
 
-    //to ask any thing related to document
-    public ChatResponseDto askQuestion(ChatRequestDto request) {
+    //to ask anything related to document
+    public ChatResponseDto askQuestion(ChatRequestDto request, User user) {
 
         long startTime = System.currentTimeMillis();
 
 
         String conversationId = request.getConversationId() != null ? request.getConversationId() : UUID.randomUUID().toString();
 
-        ensureConversationExists(conversationId, request.getQuestion());
+        ensureConversationExists(conversationId,user, request.getQuestion());
 
         log.info("Processing query: '{}', scoped documentId: {}", request.getQuestion(), request.getDocumentId());
 
@@ -57,8 +57,8 @@ public class RagService {
                 request.getQuestion(),
                 request.getDocumentId(),
                 request.getTopK(),
-                request.getMinSimilarity()
-            //    user
+                request.getMinSimilarity(),
+                user
         );
 
 
@@ -84,15 +84,16 @@ public class RagService {
 
     }
 
-    private void ensureConversationExists(String conversationId,  @NotBlank(message = "Question cannot be empty") String question) {
+    private void ensureConversationExists(String conversationId, User user, @NotBlank(message = "Question cannot be empty") String question) {
 
-        conversationRepository.findById(conversationId)
+        conversationRepository.findByIdAndUser(conversationId, user)
                 .orElseGet(() -> {
                     String title = question.length() > 50 ? question.substring(0, 47) + "....." : question;
+
                     return conversationRepository.save(
                             Conversation.builder().id(conversationId)
                                     .title(title)
-                                  //  .user(user)
+                                    .user(user)
                                     .createdAt(LocalDateTime.now())
                                     .updatedAt(LocalDateTime.now())
                                     .build()
@@ -104,17 +105,18 @@ public class RagService {
 
 
     // this streams
-    public Flux<String> streamQuestionAnswer(ChatRequestDto requestDto) {
+    public Flux<String> streamQuestionAnswer(ChatRequestDto requestDto,User user) {
         log.info("Streaming query: '{}'", requestDto.getQuestion());
         String conversationId = requestDto.getConversationId() != null ? requestDto.getConversationId() : UUID.randomUUID().toString();
         requestDto.setConversationId(conversationId);
-        ensureConversationExists(conversationId, requestDto.getQuestion());
+        ensureConversationExists(conversationId, user,requestDto.getQuestion());
 
         List<Document> relevantDocuments = retrieveRelevantDocuments(
                 requestDto.getQuestion(),
                 requestDto.getDocumentId(),
                 requestDto.getTopK(),
-                requestDto.getMinSimilarity()
+                requestDto.getMinSimilarity(),
+                user
 
         );
         String contextText = buildContextString(relevantDocuments);
@@ -172,11 +174,11 @@ public class RagService {
     }
 
 
-    public SearchResultDto searchSimilarChunks(SearchRequestDto request) {
+    public SearchResultDto searchSimilarChunks(SearchRequestDto request, User user) {
 
 
         List<Document> matchedDocs = retrieveRelevantDocuments(request.getQuery(),
-                request.getDocumentId(), request.getTopK(), request.getSimilaritySearch());
+                request.getDocumentId(), request.getTopK(), request.getSimilaritySearch(),user);
 
         List<CitationDto> citations = matchedDocs.stream().map(this::mapToCitation).toList();
 
@@ -216,7 +218,7 @@ public class RagService {
     }
 
     //    this is very important document that fetches the similar result from vector db
-    private List<Document> retrieveRelevantDocuments(@NotBlank(message = "Query cannot be empty") String query, UUID documentId, Integer topK, Double similaritySearch) {
+    private List<Document> retrieveRelevantDocuments(@NotBlank(message = "Query cannot be empty") String query, UUID documentId, Integer topK, Double similaritySearch,User user) {
 
         int effectiveTopK = (topK != null && topK > 0) ? topK : appProperties.getRag().getTopK();
 
@@ -230,36 +232,30 @@ public class RagService {
             searchRequestBuilder.similarityThreshold(effectiveSimilarity);
         }
 
-//        FilterExpressionBuilder b = new FilterExpressionBuilder();
-//        Filter.Expression filterExpression;
-//        if (documentId != null) {
-//            log.info("Filtering from document :");
-//
-//            filterExpression =
-//                    b.and(
-//                            introduced userId filter
-//                            b.eq("userId", user.getId().toString()),
-//                            b.eq("documentId", documentId.toString())
-//
-//                    ).build();
-//
-//        } else {
-//            // introduced userId filter
-//            filterExpression = b.eq("userId", user.getId().toString()).build();
-//
-//        }
-//        searchRequestBuilder.filterExpression(filterExpression);
-//
-
-
-
         FilterExpressionBuilder b = new FilterExpressionBuilder();
         Filter.Expression filterExpression;
 
-        if (documentId != null) {
-            log.info("Filtering from document: {}", documentId);
+        boolean isAdmin = user != null && user.getRole() == com.docufy.entity.Role.ADMIN;
 
-            filterExpression = b.eq("documentId", documentId.toString()).build();
+        if (isAdmin) {
+            if (documentId != null) {
+                log.info("Admin filtering by document: {}", documentId);
+                filterExpression = b.eq("documentId", documentId.toString()).build();
+            } else {
+                filterExpression = null;
+            }
+        } else if (user != null && user.getId() != null) {
+            String userIdStr = user.getId().toString();
+            if (documentId != null) {
+                log.info("Filtering for user {} and document: {}", userIdStr, documentId);
+                filterExpression = b.and(
+                        b.eq("userId", userIdStr),
+                        b.eq("documentId", documentId.toString())
+                ).build();
+            } else {
+                log.info("Filtering for user: {}", userIdStr);
+                filterExpression = b.eq("userId", userIdStr).build();
+            }
         } else {
             filterExpression = null;
         }

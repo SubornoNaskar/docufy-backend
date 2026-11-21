@@ -5,9 +5,26 @@ import ChatArea from './components/ChatArea';
 import UploadModal from './components/UploadModal';
 import SimilaritySearchModal from './components/SimilaritySearchModal';
 import DocumentChunksModal from './components/DocumentChunksModal';
-import { getDocuments, askQuestion, streamQuestion, deleteDocument, searchSimilarity } from './api/apiClient';
+import AuthPage from './components/AuthPage';
+import { useAuth } from './context/AuthContext';
+import {
+  UNAUTHORIZED_EVENT,
+  getDocuments,
+  askQuestion,
+  streamQuestion,
+  deleteDocument,
+  searchSimilarity,
+} from './api/apiClient';
+
+function getInitialRoute() {
+  if (typeof window === 'undefined') return '#/';
+  return window.location.hash || '#/';
+}
 
 export default function App() {
+  const { isAuthenticated, user, logout } = useAuth();
+
+  const [route, setRoute] = useState(getInitialRoute);
   const [documents, setDocuments] = useState([]);
   const [loadingDocs, setLoadingDocs] = useState(true);
   const [selectedDocument, setSelectedDocument] = useState(null);
@@ -27,13 +44,63 @@ export default function App() {
   // Toast / Notification
   const [toast, setToast] = useState(null);
 
-  const showToast = (message, type = 'info') => {
+  const showToast = useCallback((message, type = 'info') => {
     setToast({ message, type });
     setTimeout(() => setToast(null), 3000);
-  };
+  }, []);
+
+  // Hash-based route guard. The workspace is the only protected route because
+  // documents and chat share the same screen in the existing UI.
+  useEffect(() => {
+    const handleHashChange = () => setRoute(window.location.hash || '#/');
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, []);
+
+  useEffect(() => {
+    const isAuthRoute = route === '#/login' || route === '#/register';
+
+    if (!isAuthenticated && !isAuthRoute) {
+      window.location.hash = '#/login';
+    } else if (isAuthenticated && route !== '#/app') {
+      window.location.hash = '#/app';
+    }
+  }, [isAuthenticated, route]);
+
+  useEffect(() => {
+    const handleUnauthorized = (event) => {
+      showToast(event?.detail || 'Session expired. Please sign in again.', 'warning');
+      setDocuments([]);
+      setMessages([]);
+      setSelectedDocument(null);
+      setIsUploadOpen(false);
+      setIsSearchOpen(false);
+      setInspectingDoc(null);
+    };
+
+    window.addEventListener(UNAUTHORIZED_EVENT, handleUnauthorized);
+    return () => window.removeEventListener(UNAUTHORIZED_EVENT, handleUnauthorized);
+  }, [showToast]);
+
+  const handleModeChange = useCallback((nextMode) => {
+    window.location.hash = nextMode === 'register' ? '#/register' : '#/login';
+  }, []);
+
+  const handleLogout = useCallback(() => {
+    logout();
+    setDocuments([]);
+    setMessages([]);
+    setSelectedDocument(null);
+    setIsUploadOpen(false);
+    setIsSearchOpen(false);
+    setInspectingDoc(null);
+    showToast('You have been signed out.', 'info');
+  }, [logout, showToast]);
 
   // Fetch documents from backend
   const loadDocuments = useCallback(async () => {
+    if (!isAuthenticated) return;
+
     try {
       setLoadingDocs(true);
       const data = await getDocuments();
@@ -44,14 +111,16 @@ export default function App() {
     } finally {
       setLoadingDocs(false);
     }
-  }, []);
+  }, [isAuthenticated, showToast]);
 
   useEffect(() => {
-    loadDocuments();
-  }, [loadDocuments]);
+    if (isAuthenticated) loadDocuments();
+  }, [loadDocuments, isAuthenticated]);
 
   // Global keyboard shortcut: Cmd+K / Ctrl+K
   useEffect(() => {
+    if (!isAuthenticated) return undefined;
+
     const handleKeyDown = (e) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
@@ -60,7 +129,7 @@ export default function App() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  }, [isAuthenticated]);
 
   // Handle sending a message in chat
   const handleSendMessage = async (text) => {
@@ -276,6 +345,37 @@ export default function App() {
     }
   };
 
+  const currentMode = route === '#/register' ? 'register' : 'login';
+
+  const toastNode = toast ? (
+    <div
+      className={`fixed bottom-5 right-5 z-50 px-4 py-2.5 rounded-xl shadow-xl text-xs font-medium border flex items-center gap-2 animate-bounce ${
+        toast.type === 'error'
+          ? 'bg-rose-950 border-rose-800 text-rose-200'
+          : toast.type === 'warning'
+          ? 'bg-amber-950 border-amber-800 text-amber-200'
+          : toast.type === 'success'
+          ? 'bg-emerald-950 border-emerald-800 text-emerald-200'
+          : 'bg-blue-950 border-blue-800 text-blue-200'
+      }`}
+    >
+      <span>{toast.message}</span>
+    </div>
+  ) : null;
+
+  if (!isAuthenticated) {
+    return (
+      <>
+        <AuthPage
+          mode={currentMode}
+          onModeChange={handleModeChange}
+          onNotice={showToast}
+        />
+        {toastNode}
+      </>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-[#070b14] text-slate-100 flex flex-col font-sans">
       {/* Top Navigation */}
@@ -285,6 +385,8 @@ export default function App() {
         onResetScope={() => setSelectedDocument(null)}
         onOpenSearch={() => setIsSearchOpen(true)}
         onToggleMobileSidebar={() => setIsMobileSidebarOpen((prev) => !prev)}
+        user={user}
+        onLogout={handleLogout}
       />
 
       {/* Main Workspace: Sidebar + Chat Area */}
@@ -357,19 +459,7 @@ export default function App() {
       />
 
       {/* Toast Notification */}
-      {toast && (
-        <div
-          className={`fixed bottom-5 right-5 z-50 px-4 py-2.5 rounded-xl shadow-xl text-xs font-medium border flex items-center gap-2 animate-bounce ${
-            toast.type === 'error'
-              ? 'bg-rose-950 border-rose-800 text-rose-200'
-              : toast.type === 'success'
-              ? 'bg-emerald-950 border-emerald-800 text-emerald-200'
-              : 'bg-blue-950 border-blue-800 text-blue-200'
-          }`}
-        >
-          <span>{toast.message}</span>
-        </div>
-      )}
+      {toastNode}
     </div>
   );
 }

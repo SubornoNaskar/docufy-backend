@@ -1,5 +1,5 @@
 import React from 'react';
-import { Search, ExternalLink, Sun, Sparkles, BookOpen, Menu } from 'lucide-react';
+import { Search, ExternalLink, Sun, Sparkles, BookOpen, Menu, LogOut } from 'lucide-react';
 
 export default function Header({
   documentsCount = 0,
@@ -7,7 +7,15 @@ export default function Header({
   onResetScope,
   onOpenSearch,
   onToggleMobileSidebar,
+  user = null,
+  onLogout,
 }) {
+  const displayName = user?.username || user?.email || 'User';
+  const initials = displayName.slice(0, 2).toUpperCase();
+  const roleLabel = user?.role
+    ? String(user.role).charAt(0) + String(user.role).slice(1).toLowerCase()
+    : 'signed in';
+
   return (
     <header className="h-16 border-b border-[#17223b] bg-[#070b14] px-3 sm:px-6 flex items-center justify-between z-30 select-none">
       {/* Left: Mobile Toggle & Branding */}
@@ -90,6 +98,30 @@ export default function Header({
 
         <div className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-400 hover:text-white hover:bg-[#0f172a] transition-colors cursor-pointer border border-transparent hover:border-[#1e293b]">
           <Sun className="w-4 h-4" />
+        </div>
+
+        <div className="flex items-center gap-2 sm:pl-2 sm:ml-1 sm:border-l sm:border-[#1e293b]">
+          <div
+            className="hidden sm:flex w-8 h-8 rounded-lg bg-gradient-to-br from-blue-600 to-indigo-600 text-white items-center justify-center text-[10px] font-bold shadow-md shadow-blue-600/25 ring-1 ring-blue-400/30"
+            title={displayName}
+          >
+            {initials}
+          </div>
+          <div className="hidden lg:block leading-tight">
+            <p className="text-[11px] font-semibold text-slate-200 max-w-[120px] truncate">
+              {displayName}
+            </p>
+            <p className="text-[10px] text-slate-500">{roleLabel}</p>
+          </div>
+          <button
+            type="button"
+            onClick={onLogout}
+            title="Sign out"
+            aria-label="Sign out"
+            className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-400 hover:text-rose-300 hover:bg-rose-950/30 border border-transparent hover:border-rose-900/50 transition-colors"
+          >
+            <LogOut className="w-4 h-4" />
+          </button>
         </div>
       </div>
     </header>

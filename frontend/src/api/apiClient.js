@@ -1,13 +1,73 @@
 import axios from 'axios';
+import { clearAuth, getStoredToken } from '../utils/authStorage';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api/v1';
+const AUTH_ENDPOINT_PATTERN = /\/auth\/(login|register)(?:\?|$)/;
+
+export const UNAUTHORIZED_EVENT = 'auth:unauthorized';
+
+let unauthorizedHandled = false;
+
+export function notifyUnauthorized(
+  message = 'Your session has expired. Please sign in again.'
+) {
+  clearAuth();
+
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT, { detail: message }));
+  }
+}
+
+export function getAuthorizationHeader() {
+  const token = getStoredToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
 
 export const apiClient = axios.create({
   baseURL: API_BASE,
-  headers: {
-    'Content-Type': 'application/json',
-  },
 });
+
+apiClient.interceptors.request.use((config) => {
+  const token = getStoredToken();
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
+apiClient.interceptors.response.use(
+  (response) => {
+    unauthorizedHandled = false;
+    return response;
+  },
+  (error) => {
+    const url = error?.config?.url || '';
+    const isAuthRequest = AUTH_ENDPOINT_PATTERN.test(url);
+
+    if (error?.response?.status === 401 && !isAuthRequest && !unauthorizedHandled) {
+      unauthorizedHandled = true;
+      notifyUnauthorized();
+    }
+
+    return Promise.reject(error);
+  }
+);
+
+/**
+ * Authenticate with the existing Spring Security login endpoint.
+ */
+export async function loginUser(credentials) {
+  const response = await apiClient.post('/auth/login', credentials);
+  return response.data;
+}
+
+/**
+ * Register through the existing Spring Security registration endpoint.
+ */
+export async function registerUser(values) {
+  const response = await apiClient.post('/auth/register', values);
+  return response.data;
+}
 
 function getValidConversationId(cid) {
   if (cid) return cid;
@@ -33,9 +93,6 @@ export async function uploadSingleDocument(file, onProgress) {
   formData.append('file', file);
 
   const response = await apiClient.post('/documents/upload', formData, {
-    headers: {
-      'Content-Type': 'multipart/form-data',
-    },
     onUploadProgress: (progressEvent) => {
       if (progressEvent.total && onProgress) {
         const percentCompleted = Math.round(
@@ -58,9 +115,6 @@ export async function uploadMultipleDocuments(files, onProgress) {
   });
 
   const response = await apiClient.post('/documents/upload-multiple', formData, {
-    headers: {
-      'Content-Type': 'multipart/form-data',
-    },
     onUploadProgress: (progressEvent) => {
       if (progressEvent.total && onProgress) {
         const percentCompleted = Math.round(
@@ -123,12 +177,19 @@ export async function streamQuestion(
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        ...getAuthorizationHeader(),
       },
       body: JSON.stringify(payload),
     });
 
     if (!response.ok) {
       const errorText = await response.text();
+
+      if (response.status === 401) {
+        notifyUnauthorized('Your session has expired. Please sign in again.');
+        throw new Error('Your session has expired. Please sign in again.');
+      }
+
       throw new Error(`Stream request failed (${response.status}): ${errorText}`);
     }
 
